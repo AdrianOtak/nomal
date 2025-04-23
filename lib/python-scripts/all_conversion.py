@@ -5,6 +5,9 @@ from PIL import Image
 images_folder = "images/"
 conversions_folder = "conversions/"
 
+# Ensure the conversions folder exists
+os.makedirs(conversions_folder, exist_ok=True)
+
 # Define thresholds for color classification
 black_threshold = 100
 
@@ -65,7 +68,7 @@ def save_bitmap_as_bin(bw_bitmap, filename):
 
 # Iterate through each PNG file in the images folder
 for filename in os.listdir(images_folder):
-    if filename.endswith(".png"):
+    if filename.endswith(".JPG"):
         # Open and resize the image
         img = Image.open(os.path.join(images_folder, filename))
         img = img.resize((800, 480))  # Resize to match display resolution
@@ -110,4 +113,5 @@ for filename in os.listdir(images_folder):
         save_bitmap_as_bin(bw_bitmap, bin_filename)
         print(f"Converted {filename} to {bin_filename}")
 
-print("All PNG files have been converted and saved as .bin files.")
+print("All jpg files have been converted and saved as .bin files.")
+print("Converted files should be located in:", os.path.abspath(conversions_folder))
