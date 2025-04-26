@@ -1,39 +1,8 @@
-/*****************************************************************************
-* | File      	:   EPD_7in3f.c
-* | Author      :   Waveshare team
-* | Function    :   7.3inch e-Paper (F)
-* | Info        :
-*----------------
-* |	This version:   V1.0
-* | Date        :   2022-10-21
-* | Info        :
-* -----------------------------------------------------------------------------
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documnetation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to  whom the Software is
-# furished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS OR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-#
-******************************************************************************/
+// epd7in3f.cpp – Angepasst für GxEPD2-kompatibles SPI-Handling
 
-#include <stdlib.h>
 #include "epd7in3f.h"
-
-Epd::~Epd() {
-};
+#include "epdif.h"
+#include "SPI.h"
 
 Epd::Epd() {
     reset_pin = RST_PIN;
@@ -44,18 +13,21 @@ Epd::Epd() {
     height = EPD_HEIGHT;
 };
 
-/******************************************************************************
-function :  Initialize the e-Paper register
-parameter:
-******************************************************************************/
+Epd::~Epd() {
+}
+
 int Epd::Init(void) {
-    if (IfInit() != 0) {
+    Serial.println("start init");
+    if (EpdIf::IfInit() != 0) {
         return -1;
     }
+    Serial.println("start reset");
+
     Reset();
-    DelayMs(20);
+    Serial.println("reset fertig");
+    delay(20);
     EPD_7IN3F_BusyHigh();
-    
+
     SendCommand(0xAA);    // CMDH
     SendData(0x49);
     SendData(0x55);
@@ -144,41 +116,45 @@ int Epd::Init(void) {
     return 0;
 }
 
-/**
- *  @brief: basic function for sending commands
- */
-void Epd::SendCommand(unsigned char command) {
-    DigitalWrite(dc_pin, LOW);
-    SpiTransfer(command);
+
+void Epd::SendCommand(uint8_t command) {
+    EpdIf::SpiBeginTransaction();
+    EpdIf::DigitalWrite(DC_PIN, LOW);
+    EpdIf::SpiTransfer(command);
+    EpdIf::SpiEndTransaction();
 }
 
-/**
- *  @brief: basic function for sending data
- */
-void Epd::SendData(unsigned char data) {
-    DigitalWrite(dc_pin, HIGH);
-    SpiTransfer(data);
+void Epd::SendData(uint8_t data) {
+    EpdIf::SpiBeginTransaction();
+    EpdIf::DigitalWrite(DC_PIN, HIGH);
+    EpdIf::SpiTransfer(data);
+    EpdIf::SpiEndTransaction();
 }
 
-void Epd::EPD_7IN3F_BusyHigh(void)// If BUSYN=0 then waiting
-{
-    while(!DigitalRead(BUSY_PIN)) {
-        DelayMs(1);
+void Epd::WaitUntilIdle(void) {
+    while (EpdIf::DigitalRead(BUSY_PIN) == 0) {
+        delay(100);
     }
 }
 
-/**
- *  @brief: module reset.
- *          often used to awaken the module in deep sleep,
- *          see Epd::Sleep();
- */
 void Epd::Reset(void) {
-    DigitalWrite(reset_pin, HIGH);
-    DelayMs(20);   
-    DigitalWrite(reset_pin, LOW);                //module reset    
-    DelayMs(1);
-    DigitalWrite(reset_pin, HIGH);
-    DelayMs(20);    
+    EpdIf::DigitalWrite(RST_PIN, HIGH);
+    delay(20);
+    EpdIf::DigitalWrite(RST_PIN, LOW);
+    delay(1);
+    EpdIf::DigitalWrite(RST_PIN, HIGH);
+    delay(20);
+}
+
+void Epd::Clear(uint8_t color) {
+    SendCommand(0x10);
+    for(int i=0; i<width/2; i++) {
+        for(int j=0; j<height; j++) {
+            SendData((color<<4)|color);
+		}
+	}
+    
+    TurnOnDisplay();
 }
 
 void Epd::TurnOnDisplay(void) {
@@ -194,106 +170,24 @@ void Epd::TurnOnDisplay(void) {
     EPD_7IN3F_BusyHigh();
 }
 
-/******************************************************************************
-function :  Sends the image buffer in RAM to e-Paper and displays
-parameter:
-******************************************************************************/
-void Epd::EPD_7IN3F_Display(const UBYTE *image) {
-    unsigned long i,j;
-    
-    SendCommand(0x10);
-    for(i=0; i<height; i++) {
-        for(j=0; j<width/2; j++) {
-            SendData(image[j + width*i]);
-		}
-    }
-    
-    TurnOnDisplay();
-}
-
-/******************************************************************************
-function :  Sends the part image buffer in RAM to e-Paper and displays
-parameter:
-******************************************************************************/
-void Epd::EPD_7IN3F_Display_part(const UBYTE *image, UWORD xstart, UWORD ystart, 
-                                        UWORD image_width, UWORD image_heigh)
-{
-    unsigned long i,j;
-
-    SendCommand(0x10);
-    for(i=0; i<height; i++) {
-        for(j=0; j< width/2; j++) {
-            if(i<image_heigh+ystart && i>=ystart && j<(image_width+xstart)/2 && j>=xstart/2) {
-              SendData(pgm_read_byte(&image[(j-xstart/2) + (image_width/2*(i-ystart))]));
-            }
-			else {
-				SendData(0x11);
-			}
-		}
-    }
-
-    TurnOnDisplay();
-}
-
-/******************************************************************************
-function :  show 7 kind of color block
-parameter:
-******************************************************************************/
-void Epd::EPD_7IN3F_Show7Block(void)
-{
-    unsigned long i, j, k;
-    unsigned char const Color_seven[8] = 
-    {EPD_7IN3F_BLACK, EPD_7IN3F_BLUE, EPD_7IN3F_GREEN, EPD_7IN3F_ORANGE,
-    EPD_7IN3F_RED, EPD_7IN3F_YELLOW, EPD_7IN3F_WHITE, EPD_7IN3F_WHITE};
-
-    SendCommand(0x10);
-    for(i=0; i<240; i++) {
-        for(k = 0 ; k < 4; k ++) {
-            for(j = 0 ; j < 100; j ++) {
-                SendData((Color_seven[k]<<4) |Color_seven[k]);
-            }
-        }
-    }
-    
-    for(i=0; i<240; i++) {
-        for(k = 4 ; k < 8; k ++) {
-            for(j = 0 ; j < 100; j ++) {
-                SendData((Color_seven[k]<<4) |Color_seven[k]);
-            }
-        }
-    }
-    TurnOnDisplay();
-}
-
-/******************************************************************************
-function : 
-      Clear screen
-******************************************************************************/
-void Epd::Clear(UBYTE color) {
-    SendCommand(0x10);
-    for(int i=0; i<width/2; i++) {
-        for(int j=0; j<height; j++) {
-            SendData((color<<4)|color);
-		}
-	}
-    
-    TurnOnDisplay();
-}
-
-/**
- *  @brief: After this command is transmitted, the chip would enter the 
- *          deep-sleep mode to save power. 
- *          The deep sleep mode would return to standby by hardware reset. 
- *          The only one parameter is a check code, the command would be
- *          You can use EPD_Reset() to awaken
- */
 void Epd::Sleep(void) {
     SendCommand(0x07);
     SendData(0xA5);
-    DelayMs(10);
-	DigitalWrite(RST_PIN, 0); // Reset
+    delay(10);
+	EpdIf::DigitalWrite(RST_PIN, 0); // Reset
 }
 
+void Epd::EPD_7IN3F_BusyHigh(void) {
+    Serial.println("Display Busy");
+    while(EpdIf::DigitalRead(BUSY_PIN) == 0) {
+        delay(10);
+    }
+}
 
-
-/* END OF FILE */
+void Epd::EPD_7IN3F_Display(uint8_t *Image) {
+    SendCommand(0x10);
+    for (uint32_t i = 0; i < EPD_7IN3F_BUFFER_SIZE; i++) {
+        SendData(Image[i]);
+    }
+    TurnOnDisplay();
+}
