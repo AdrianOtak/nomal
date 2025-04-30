@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>ESP32 Bild Konverter + Uploader</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+        }
+        canvas {
+            border: 1px solid black;
+            margin: 10px;
+        }
+        input, button {
+            margin: 10px;
+            padding: 10px;
+        }
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            justify-items: center;
+            padding: 10px;
+        }
+
+        .image-grid canvas {
+            width: 100%;
+            height: auto;
+            aspect-ratio: 800 / 480;
+            display: block;
+        }
+
+    </style>
+</head>
+<body>
+
+    <h1>ESP32 Bild Konverter und Uploader</h1>
+
+    <input type="file" id="fileInput" accept="image/*"><br>
+
+    <button onclick="convertImage()">Bild konvertieren</button><br>
+
+    <canvas id="originalCanvas" width="800" height="480"></canvas><br>
+    <canvas id="convertedCanvas" width="800" height="480"></canvas><br>
+
+    <button onclick="uploadBin()"> Bild hochladen</button>
+
+    <p id="status"></p>
+
+    <p id="spaceInfo">Speicherplatz: ...</p>
+
+    <h2>Gespeicherte Bilder:</h2>
+    <div id="imageList" class="image-grid"></div>
+
+    <script>
+        const colorMap = [
+            [0, 0, 0],         // 0x0 Black
+            [255, 255, 255],   // 0x1 White
+            [0, 255, 0],       // 0x2 Green
+            [0, 0, 255],       // 0x3 Blue
+            [255, 0, 0],       // 0x4 Red
+            [255, 255, 0],     // 0x5 Yellow
+            [255, 165, 0]      // 0x6 Orange
+        ];
+
+
+        let binData = null; // Hier speichern wir später das fertige .bin
+
+        function clamp(value) {
+            return Math.max(0, Math.min(255, value));
+        }
+
+        function closestColor(r, g, b) {
+            let minDist = Infinity;
+            let bestIndex = 0;
+            for (let i = 0; i < colorMap.length; i++) {
+                const [cr, cg, cb] = colorMap[i];
+                const dist = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2;
+                if (dist < minDist) {
+                    minDist = dist;
+                    bestIndex = i;
+                }
+            }
+            return bestIndex;
+        }
+
+        function convertImage() {
+            const fileInput = document.getElementById('fileInput');
+            const originalCanvas = document.getElementById('originalCanvas');
+            const convertedCanvas = document.getElementById('convertedCanvas');
+
+            if (!fileInput.files[0]) {
+                alert("Bitte ein Bild auswählen!");
+                return;
+            }
+
+            const ctxOriginal = originalCanvas.getContext('2d');
+            const ctxConverted = convertedCanvas.getContext('2d');
+            const img = new Image();
+
+            img.onload = function() {
+                // Original zeichnen (resize auf 800x480)
+                ctxOriginal.clearRect(0, 0, 800, 480);
+                ctxOriginal.drawImage(img, 0, 0, 800, 480);
+
+                // Pixel lesen
+                let imageData = ctxOriginal.getImageData(0, 0, 800, 480);
+                let data = imageData.data;
+
+                // Dithering anwenden
+                for (let y = 0; y < 480; y++) {
+                    for (let x = 0; x < 800; x++) {
+                        const i = (y * 800 + x) * 4;
+                        const oldPixel = [data[i], data[i + 1], data[i + 2]];
+                        const index = closestColor(...oldPixel);
+                        const newPixel = colorMap[index];
+
+                        const err = [
+                            data[i] - newPixel[0],
+                            data[i + 1] - newPixel[1],
+                            data[i + 2] - newPixel[2]
+                        ];
+
+                        data[i] = newPixel[0];
+                        data[i + 1] = newPixel[1];
+                        data[i + 2] = newPixel[2];
+
+                        // Fehlerverteilung
+                        distributeError(data, x + 1, y,     err, 7/16);
+                        distributeError(data, x - 1, y + 1, err, 3/16);
+                        distributeError(data, x,     y + 1, err, 5/16);
+                        distributeError(data, x + 1, y + 1, err, 1/16);
+                    }
+                }
+
+                ctxConverted.putImageData(imageData, 0, 0);
+
+                // .bin Datei bauen
+                let binArray = [];
+                for (let y = 0; y < 480; y++) {
+                    for (let x = 0; x < 800; x += 2) {
+                        const i1 = (y * 800 + x) * 4;
+                        const i2 = (y * 800 + (x + 1)) * 4;
+
+                        const color1 = closestColor(data[i1], data[i1+1], data[i1+2]);
+                        const color2 = closestColor(data[i2], data[i2+1], data[i2+2]);
+
+                        const byte = (color1 << 4) | color2;
+                        binArray.push(byte);
+                    }
+                }
+
+                binData = new Uint8Array(binArray);
+                document.getElementById('status').innerText = "Bild konvertiert! Bereit für Upload.";
+            };
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(fileInput.files[0]);
+        }
+
+        function distributeError(data, x, y, err, factor) {
+            if (x < 0 || x >= 800 || y < 0 || y >= 480) return;
+            const i = (y * 800 + x) * 4;
+            data[i] = clamp(data[i] + err[0] * factor);
+            data[i + 1] = clamp(data[i + 1] + err[1] * factor);
+            data[i + 2] = clamp(data[i + 2] + err[2] * factor);
+        }
+
+        function checkFreeSpace() {
+            fetch("/freespace")  // KEINE feste IP nötig
+                .then(response => response.json())
+                .then(data => {
+                    const freiKB = Math.round(data.free / 1024);
+                    const gesamtKB = Math.round(data.total / 1024);
+                    document.getElementById('spaceInfo').innerText = 
+                        `Speicherplatz: ${freiKB} KB frei von ${gesamtKB} KB`;
+                })
+                .catch(error => {
+                    console.error(error);
+                    document.getElementById('spaceInfo').innerText = 
+                        "Speicherinfo nicht verfügbar";
+                });
+        }
+
+
+        function uploadBin() {
+            if (!binData) {
+                alert("Bitte erst ein Bild konvertieren!");
+                return;
+            }
+
+            const formData = new FormData();
+            const file = new Blob([binData], { type: "application/octet-stream" });
+            formData.append("file", file, "image.bin");
+
+            fetch("/upload", {  // KEINE feste IP
+                method: "POST",
+                body: formData
+            })
+            .then(async response => {
+                const text = await response.text();
+                console.log("HTTP Status:", response.status);
+                console.log("Antworttext:", text);
+
+                if (response.ok) {
+                    document.getElementById('status').innerText = "Nice neue Bild inegetan in Bilderrahme";
+                    checkFreeSpace();  // sofort aktualisieren
+                } else {
+                    document.getElementById('status').innerText = "Fehler beim Upload: " + text;
+                }
+            })
+            .catch(error => {
+                console.error("Fetch-Fehler:", error);
+                document.getElementById('status').innerText = "Verbindungsfehler: " + error;
+            });
+
+            updateImageList();
+        }
+
+        function drawBinToCanvas(filename, canvas) {
+            return fetch(`/files/${filename}`)
+                .then(response => response.arrayBuffer())
+                .then(buffer => {
+                    const data = new Uint8Array(buffer);
+
+                    // Interne Auflösung
+                    canvas.width = 800;
+                    canvas.height = 480;
+
+                    // CSS-Darstellung im Grid
+                    canvas.style.width = "100%";
+                    canvas.style.height = "auto";
+                    canvas.style.aspectRatio = "800 / 480";
+
+                    const ctx = canvas.getContext("2d");
+                    const imgData = ctx.createImageData(800, 480);
+                    let offset = 0;
+
+                    for (let y = 0; y < 480; y++) {
+                        for (let x = 0; x < 800; x += 2) {
+                            const byte = data[offset++];
+                            const index1 = (byte >> 4) & 0x0F;
+                            const index2 = byte & 0x0F;
+
+                            // Farben glätten (optional): einfache Mittelung oder weiche Farben möglich
+                            const [r1, g1, b1] = colorMap[index1] || [128, 128, 128];
+                            const [r2, g2, b2] = colorMap[index2] || [128, 128, 128];
+
+                            const i1 = (y * 800 + x) * 4;
+                            const i2 = (y * 800 + x + 1) * 4;
+
+                            imgData.data[i1] = r1;
+                            imgData.data[i1 + 1] = g1;
+                            imgData.data[i1 + 2] = b1;
+                            imgData.data[i1 + 3] = 255;
+
+                            imgData.data[i2] = r2;
+                            imgData.data[i2 + 1] = g2;
+                            imgData.data[i2 + 2] = b2;
+                            imgData.data[i2 + 3] = 255;
+                        }
+                    }
+
+                    ctx.putImageData(imgData, 0, 0);
+                });
+        }
+
+
+
+
+        function fillBlock(imgData, startX, startY, scale, r, g, b) {
+            for (let dy = 0; dy < scale; dy++) {
+                for (let dx = 0; dx < scale; dx++) {
+                    const x = startX + dx;
+                    const y = startY + dy;
+                    const i = (y * imgData.width + x) * 4;
+
+                    imgData.data[i] = r;
+                    imgData.data[i + 1] = g;
+                    imgData.data[i + 2] = b;
+                    imgData.data[i + 3] = 255;
+                }
+            }
+        }
+
+
+        async function updateImageList() {
+            const container = document.getElementById("imageList");
+            container.innerHTML = "";
+
+            try {
+                const response = await fetch("/list");
+                const fileList = await response.json();
+
+                for (let filename of fileList) {
+                    const wrapper = document.createElement("div");
+                    wrapper.style.display = "flex";
+                    wrapper.style.flexDirection = "column";
+                    wrapper.style.alignItems = "center";
+                    wrapper.style.margin = "10px";
+
+                    const title = document.createElement("p");
+                    title.textContent = filename;
+
+                    const canvas = document.createElement("canvas");
+                    canvas.style.border = "1px solid black";
+                    canvas.style.width = "100%";
+                    canvas.style.height = "auto";
+                    canvas.style.aspectRatio = "800 / 480";
+
+                    wrapper.appendChild(title);
+                    wrapper.appendChild(canvas);
+                    container.appendChild(wrapper);
+
+                    await drawBinToCanvas(filename, canvas);  
+                }
+            } catch (err) {
+                console.error("Fehler beim Laden der Liste:", err);
+            }
+        }
+
+
+        // Beim Laden automatisch starten:
+        window.addEventListener("DOMContentLoaded", () => {
+            checkFreeSpace();
+            updateImageList();
+        });
+
+    </script>
+
+</body>
+</html>
