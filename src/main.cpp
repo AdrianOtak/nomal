@@ -21,13 +21,13 @@
 
 // Zeiteinstellungen
 #define TIME_INIT_TO_IMAGE    10000       
-#define TIME_IMAGE_TO_CLEAR   300000       
-#define TIME_CLEAR_TO_IMAGE   50000       
+#define TIME_IMAGE_TO_CLEAR   216000       
+#define TIME_CLEAR_TO_IMAGE   600000       
 
 // Zustände
 #define STATE_FIRST_IMAGE 1
 #define STATE_CLEAR       2
-#define STATE_NEXT_IMAGE  4
+#define STATE_NEXT_IMAGE  3
 
 bool case1Executed = false;
 bool case2Executed = false;
@@ -41,10 +41,10 @@ int currentBitmapIndex = 0;
 Epd epd;
 
 // WLAN-Daten
-const char* ssid = "CGA2121_5ML8yKP";       // <<< HIER DEIN WLAN NAME EINTIPPEN
-const char* password = "cEk3fPkjmYhfPzy4vK"; // <<< HIER DEIN WLAN PASSWORT EINTIPPEN
+const char* ssid = "ORBI33";       
+const char* password = "123456789"; 
 
-AsyncWebServer server(80); // Webserver Objekt
+AsyncWebServer server(80); 
 
 void clearScreen() {
   Serial.println("Clearing Screen...");
@@ -92,6 +92,10 @@ void setup() {
   setupListFilesHandler(server);
   setupFreeSpaceRoute(server);
   setupBinFileHandler(server);
+  server.on("/uptime", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", String(millis()));
+  });
+
   server.begin();
   Serial.println("Server gestartet");
   countFilesFromSD();
@@ -152,12 +156,6 @@ void loop() {
         halftime = true;
         state = STATE_CLEAR;
       }
-      break;
-
-    default:
-      case1Executed = false;
-      state = STATE_FIRST_IMAGE;
-      stateStartTime = millis();
       break;
   }
 }
